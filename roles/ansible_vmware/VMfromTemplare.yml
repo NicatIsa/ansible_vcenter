@@ -1,0 +1,8 @@
+- name: Create a VM from a template
+  hosts: localhost
+  connection: local
+  gather_facts: yes
+  tasks:
+  - name: Create CentOS vm from template
+    import_role:
+      name: ansible_vmware

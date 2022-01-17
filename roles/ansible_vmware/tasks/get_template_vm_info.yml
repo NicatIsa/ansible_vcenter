@@ -1,0 +1,15 @@
+- name: Gather only registered virtual machine templates
+  community.vmware.vmware_vm_info:
+      hostname: "{{ HOSTNAME }}"
+      username: "{{ USERNAME }}"
+      password: "{{ PASSWORD }}"
+      validate_certs: no
+      vm_type: template
+  delegate_to: localhost
+  register: template_info
+  tags:
+   - template_info
+
+- debug:
+    var: template_info.virtual_machines
+  

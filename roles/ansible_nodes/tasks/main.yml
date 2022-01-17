@@ -1,0 +1,782 @@
+---
+- name: Collect package list
+  package_facts:
+      manager: auto
+  tags:
+      - always
+
+- name: 1.9.0 - Ensure updated system
+  dnf:
+      name: "*"
+      state: latest
+      security: true
+  tags:
+      - 1.9.0
+# Access and Authorization
+  # This control is early in order to create the files. This will
+  # make sure they are available when cron starts
+- name: Create the cron/at allow files (5.1.8)
+  copy:
+      dest: "{{ item }}"
+      content: ""
+      force: no
+      owner: root
+      group: root
+      mode: 0644
+  with_items:
+      - /etc/cron.allow
+      - /etc/at.allow
+  tags:
+      - 5.1.8
+
+- name: 5.1.1 - Ensure cron is enabled
+  service:
+      name: crond
+      enabled: yes
+      state: started
+  when: "'cronie' in ansible_facts.packages"
+  tags:
+      - 5.1.1
+
+- name: 5.1.2 - Ensure permissions on /etc/crontab
+  file:
+      path: /etc/crontab
+      owner: root
+      group: root
+      mode: 0600
+  tags:
+      - 5.1.2
+
+- name: 5.1.[3-7] - Ensure permissions on crontab directories
+  file:
+      path: "{{ item }}"
+      owner: root
+      group: root
+      mode: 0700
+  loop:
+        - /etc/cron.hourly
+        - /etc/cron.daily
+        - /etc/cron.weekly
+        - /etc/cron.monthly
+        - /etc/cron.d
+  tags:
+      - 5.1.3
+      - 5.1.4
+      - 5.1.5
+      - 5.1.6
+      - 5.1.7
+
+  # Restrict at/cron skipped (5.1.8) as is rarely used and environment dependent
+
+  # If you want to deploy your own SSH config file, exclude the entire 5.2.0 tag
+- name: 5.2 - SSH File configurations
+  block:
+      - name: 5.2.1 - Set permissions on SSH file
+        file:
+          dest: /etc/ssh/sshd_config
+          owner: root
+          group: root
+          mode: 0600
+        tags:
+          - 5.2.1
+
+      # Control 5.2.2, Ensure SSH access is limited is environment dependent
+      # skipping
+
+      - name: 5.2.3 - Set Permissions on ssh private host keys
+        block:
+          - name: 5.2.3 - Find all ssh private host keys
+            find:
+              paths: /etc/ssh
+              file_type: file
+              patterns: ssh_host_*_key
+            register: ssh_host_out
+            changed_when: false
+
+          - name: 5.2.3 - Set permissions on all ssh private host keys (Red Hat set the group to ssh_keys and mode to 640)
+            file:
+              dest: "{{ item.path }}"
+              owner: root
+              group: ssh_keys
+              mode: 0640
+            loop: "{{ ssh_host_out.files }}"
+        tags:
+          - 5.2.3
+
+      - name: 5.2.4 - Set Permissions on ssh public host keys
+        block:
+          - name: 5.2.4 - Find all ssh public host keys
+            find:
+              paths: /etc/ssh
+              file_type: file
+              patterns: ssh_host_*_key.pub
+            register: ssh_hostpub_out
+            changed_when: false
+
+          - name: 5.2.4 - Set permissions on all ssh public host keys
+            file:
+              dest: "{{ item.path }}"
+              owner: root
+              group: root
+              mode: 0644
+            loop: "{{ ssh_hostpub_out.files }}"
+        tags:
+          - 5.2.4
+      - name: 5.2.5 - Set LogLevel to {{ ssh_log_level }} or more verbose, but not debug
+        replace:
+          path: /etc/ssh/sshd_config
+          replace: "LogLevel {{ ssh_log_level | upper }}"
+          regexp: '^LogLevel\s*(QUIET|FATAL|ERROR|DEBUG)*$'
+        notify:  restart sshd
+        when: ssh_log_level == "INFO" or ssh_log_level == "WARN"
+        tags:
+          - 5.2.5
+      # Using replace with a replace argument of "" removes the selected
+      #  text.
+      - name: 5.2.6 - Disable X11 forwarding
+        lineinfile:
+          path: /etc/ssh/sshd_config
+          state: absent
+          regexp: '^X11Forwarding\s*yes'
+        notify:  restart sshd
+        tags:
+          - 5.2.6
+
+      - name: 5.2.7 - Ensure SSH MaxAuthTires is set to {{ ssh_max_auth_tries }} or less
+        lineinfile:
+          path: /etc/ssh/sshd_config
+          line: "MaxAuthTries {{ ssh_max_auth_tries }}"
+          regexp: '^MaxAuthTries\s*[^1-{{ ssh_max_auth_tries | int + 1 }}]'
+          insertafter: "^#MaxAuthTries"
+        notify:  restart sshd
+        tags:
+          - 5.2.7
+
+      - name: 5.2.8 - Ensure IgnoreRhosts is set
+        lineinfile:
+          path: /etc/ssh/sshd_config
+          line: "IgnoreRhosts yes"
+          regexp: '^IgnoreRhosts\s*[^y]'
+        notify:  restart sshd
+        tags:
+          - 5.2.8
+      - name: 5.2.12 - Ensure PermitUserEnvironment is disabled
+        lineinfile:
+          path: /etc/ssh/sshd_config
+          state: absent
+          regexp: '^PermitUserEnvironment\s*[^n]'
+        notify:  restart sshd
+        tags:
+          - 5.2.12
+
+      - name: 5.2.13 - Ensure SSH Idle Timeout is configured ClientAliveInterval
+        lineinfile:
+          path: /etc/ssh/sshd_config
+          line: "ClientAliveInterval {{ ssh_alive_interval }}"
+          regexp: "^ClientAliveInterval {{ ssh_alive_interval }}"
+          insertafter: "^#ClientAliveInterval"
+        notify:  restart sshd
+        tags:
+          - 5.2.13
+
+      - name: 5.2.13 - Ensure SSH Idle Timeout is configured ClientAliveCountMax
+        lineinfile:
+          path: /etc/ssh/sshd_config
+          line: "ClientAliveCountMax {{ ssh_alive_count_max }}"
+          regexp: "^ClientAliveCountMax {{ ssh_alive_count_max }}"
+          insertafter: "^#ClientAliveCountMax"
+        notify:  restart sshd
+        tags:
+          - 5.2.13
+
+      - name: 5.2.14 - Ensure SSH LoginGraceTime is set to {{ ssh_grace_time }} or less
+        lineinfile:
+          path: /etc/ssh/sshd_config
+          line: "LoginGraceTime {{ ssh_grace_time }}"
+          regexp: "^LoginGraceTime {{ ssh_grace_time }}"
+          insertafter: "^#LoginGraceTime"
+        notify:  restart sshd
+        tags:
+          - 5.2.14
+
+      - name: 5.2.15 - Ensure SSH Banner is configured
+        lineinfile:
+          path: "/etc/ssh/sshd_config"
+          line: "Banner /etc/{{ ssh_login_banner }}"
+          regexp: "^Banner /etc/{{ ssh_login_banner }}"
+        notify:  restart sshd
+        tags:
+          - 5.2.15
+
+      - name: 5.2.16 - Ensure SSH is configured to use PAM
+        lineinfile:
+          path: "/etc/ssh/sshd_config"
+          line: "UsePAM yes"
+          regexp: '^UsePAM\s+[yes|no]'
+        notify:  restart sshd
+        tags:
+          - 5.2.16
+
+      - name: 5.2.17 - Disable TCP Forwarding
+        lineinfile:
+          path: "/etc/ssh/sshd_config"
+          line: "AllowTcpForwarding no"
+          regexp: '^AllowTcpForwarding\s+(yes|no)'
+          insertafter: "^#AllowTcpForwarding"
+        notify:  restart sshd
+        tags:
+          - 5.2.17
+
+
+# Logging and Auditing
+- name: 4.1 Install and configure system auditing
+  block:
+      - name: 4.1.1 - Install Audit
+        dnf:
+          name:
+            - audit
+            - audit-libs
+          state: present
+        tags:
+          - 4.1.1.1
+
+      - name: 4.1.1.2 - Enable auditd service
+        service:
+          name: auditd
+          enabled: yes
+          state: started
+        tags:
+          - 4.1.1.2
+
+      - name: 4.1.1.3 - Ensure auditing for processes that start prior to auditd
+      # We check here because we don't know what position the audit=1 is in
+      # order to simply do the replace, so we are instead looking for the match in the file first.
+      # If it doesn't exist, then we can just insert it
+        lineinfile:
+          path: /etc/default/grub
+          regexp: '^\s*GRUB_CMDLINE_LINUX.*audit=1'
+          state: absent
+        check_mode: yes
+        changed_when: false
+        register: audit_exist
+        failed_when: false
+        tags:
+          - 4.1.1.3
+
+      # use the replace module to add it to grub bootloader and then notify
+      #  grub to rebuild
+      - name: 4.1.1.3 - enable audit service in grub
+        replace:
+          path: /etc/default/grub
+          regexp: '^GRUB_CMDLINE_LINUX="'
+          replace: 'GRUB_CMDLINE_LINUX="audit=1 '
+        notify: rebuild grub
+        when: not audit_exist.found
+        tags:
+          - 4.1.1.3
+
+      - name: 4.1.1.4 - Ensure audit_backlog_limit is sufficient, check if limit exists
+        lineinfile:
+          path: /etc/default/grub
+          regexp: '^\s*GRUB_CMDLINE_LINUX.*audit_backlog_limit'
+          state: absent
+        check_mode: yes
+        changed_when: false
+        register: audit_backlog_exist
+        failed_when: false
+        tags:
+          - 4.1.1.4
+
+      - name: 4.1.1.4 - Ensure audit_backlog_limit is sufficient, add audit_backlog_limit to grub
+        replace:
+          dest: /etc/default/grub
+          regexp: '^\s*GRUB_CMDLINE_LINUX="'
+          replace: 'GRUB_CMDLINE_LINUX="audit_backlog_limit={{ audit_backlog_limit }} '
+        notify: rebuild grub
+        when: not audit_backlog_exist.found
+        tags:
+          - 4.1.1.4
+
+      - name: 4.1.1.4 - Ensure audit_backlog_limit is sufficient, update limit if it already exists (check)
+        lineinfile:
+          dest: /etc/default/grub
+          regexp: '^\s*GRUB_CMDLINE_LINUX=.*{{ audit_backlog_limit }}'
+          state: absent
+        check_mode: yes
+        changed_when: false
+        register: our_limit
+        when: audit_backlog_exist.found
+        tags:
+          - 4.1.1.4
+
+      - name: 4.1.1.4 - Ensure audit_backlog_limit is sufficient, update limit if it already exists (fix)
+        replace:
+          dest: /etc/default/grub
+          regexp: 'audit_backlog_limit=[\S]*'
+          replace: 'audit_backlog_limit={{ audit_backlog_limit }}'
+        notify: rebuild grub
+        when: audit_backlog_exist.found and not our_limit.found
+        tags:
+          - 4.1.1.4
+
+      # The replace module here is looking through file and make replacements of partial lines
+
+      - name: 4.1.2.[1-2] - Configure audit log storage size
+        replace:
+          path: /etc/audit/auditd.conf
+          regexp: "{{ item.find }}"
+          replace: "{{ item.replace }}"
+        loop:
+          - { find: '^max_log_file\s+=\s+[^{{ log_file_size }}]', replace: 'max_log_file = {{ log_file_size }}'} # 4.1.2.1
+          - { find: '^max_log_file_action\s+=\s+((?!keep_logs).)*$', replace: 'max_log_file_action = keep_logs' } # 4.1.2.2
+          - { find: '^space_left_action\s+=\s+((?!email).)*$', replace: 'space_left_action = email' } # 4.1.2.2
+          - { find: '^action_mail_acct\s+=\s+((?!root).)*$', replace: 'action_mail_acct = root' } # 4.1.2.2
+          - { find: '^admin_space_left_action\s+=\s+((?!suspend).)*$', replace: 'admin_space_left_action = suspend' } # 4.1.2.2
+        notify: restart auditd
+        tags:
+          - 4.1.2.1
+          - 4.1.2.2
+          - 4.1.2.3
+
+      # For the next several checks, each one is in their own file, so we are using
+      #  the copy module to place each file independently and then motifying
+      #  a restart of auditd if anything changes.
+      - name: 4.1.4 - Ensure system logins are collected
+        template:
+          dest: /etc/audit/rules.d/login.rules
+          src: audit_rules/login.rules
+          owner: root
+          group: root
+          mode: 0600
+        notify: restart auditd
+        tags:
+          4.1.4
+
+      - name: 4.1.5 - Ensure session initiation information is collected
+        template:
+          dest: /etc/audit/rules.d/sessions.rules
+          src: audit_rules/sessions.rules
+          owner: root
+          group: root
+          mode: 0600
+        notify: restart auditd
+        tags:
+          4.1.5
+
+      - name: 4.1.6 Ensure to collect events that modify date/time
+        template:
+          dest: /etc/audit/rules.d/datetime.rules
+          src: audit_rules/datetime.rules
+          owner: root
+          group: root
+          mode: 0600
+        notify: restart auditd
+        tags:
+          - 4.1.6
+
+      - name: 4.1.7 - Ensure modifications to Mandatory Access Controls are collected
+        template:
+          dest: /etc/audit/rules.d/MAC-policy.rules
+          src: audit_rules/MAC-policy.rules
+          owner: root
+          group: root
+          mode: 0600
+        notify: restart auditd
+        tags:
+          4.1.7
+
+      - name: 4.1.8 - Ensure modifications to network environment are collected
+        template:
+          dest: /etc/audit/rules.d/network.rules
+          src: audit_rules/network.rules
+          owner: root
+          group: root
+          mode: 0600
+        notify: restart auditd
+        tags:
+          4.1.8
+
+      # This is the first control that we use the min_uid variable that we determined earlier
+      - name: 4.1.9 - Ensure modifications to discretionary access controls are collected
+        template:
+          dest: /etc/audit/rules.d/dac.rules
+          src: audit_rules/dac.rules
+          owner: root
+          group: root
+          mode: 0600
+        notify: restart auditd
+        tags:
+          4.1.9
+
+      - name: 4.1.10 - Ensure unsuccessful unauthorized file access attempts are collected
+        template:
+          dest: /etc/audit/rules.d/bad-file-access.rules
+          src: audit_rules/bad-file-access.rules
+          owner: root
+          group: root
+          mode: 0600
+        notify: restart auditd
+        tags:
+          4.1.10
+
+      - name: 4.1.11 - Ensure events that modify user/group information are collected
+        template:
+          dest: /etc/audit/rules.d/user-group-info.rules
+          src: audit_rules/user-group-info.rules
+          owner: root
+          group: root
+          mode: 0600
+        notify: restart auditd
+        tags:
+          4.1.11
+
+      - name: 4.1.12 - Ensure successful file system mounts are collected
+        template:
+          dest: /etc/audit/rules.d/file-system-mounts.rules
+          src: audit_rules/file-system-mounts.rules
+          owner: root
+          group: root
+          mode: 0600
+        notify: restart auditd
+        tags:
+          4.1.12
+
+      # Control 4.1.13 - Ensure use of privileged commands is collected, is machine dependent
+      # skipping
+
+      - name: 4.1.14 - Ensure file deletion events by users are collected
+        template:
+          dest: /etc/audit/rules.d/delete.rules
+          src: audit_rules/delete.rules
+          owner: root
+          group: root
+          mode: 0600
+        notify: restart auditd
+        tags:
+          4.1.14
+
+      - name: 4.1.15 - Ensure kernel module loading and unloading is collected
+        template:
+          dest: /etc/audit/rules.d/modules.rules
+          src: audit_rules/modules.rules
+          owner: root
+          group: root
+          mode: 0600
+        notify: restart auditd
+        tags:
+          4.1.15
+
+      - name: 4.1.16 - Ensure sysadmin actions (sudolog) are collected
+        template:
+          dest: /etc/audit/rules.d/sudolog.rules
+          src: audit_rules/sudolog.rules
+          owner: root
+          group: root
+          mode: 0600
+        notify: restart auditd
+        tags:
+          - 4.1.16
+          - 4.1.3
+
+      - name: 4.1.17 - Ensure audit configuration is immutable
+        copy:
+          dest: /etc/audit/rules.d/99-finalize.rules
+          content: |
+            -e 2
+          owner: root
+          group: root
+          mode: 0600
+        notify: restart auditd
+        tags:
+          4.1.17
+  when: enable_audit is defined and enable_audit
+
+  # Section 4, Logging
+- name: 4.2.1.1 - Ensure rsyslog is installed
+  yum:
+      name: rsyslog
+      state: present
+  tags:
+      - 4.2.1.1
+
+- name: 4.2.1.2 - Enable Rsyslog
+  service:
+      name: rsyslog
+      enabled: yes
+  tags:
+      - 4.2.1.2
+
+- name: 4.2.1.3 - Ensure rsyslog default file permissions are configured
+  lineinfile:
+      path: /etc/rsyslog.conf
+      regexp: '^\$FileCreateMode\s+0640'
+      line: "$FileCreateMode 0640"
+      create: yes
+      state: present
+  tags:
+      - 4.2.1.3
+
+- name: 4.2.1.4 - Ensure logging is configured
+  copy:
+      src: "{{ rsyslog_file }}"
+      dest: "/etc/rsyslog.d/{{ rsyslog_file }}"
+      owner: root
+      group: root
+      mode: 0640
+  when: rsylog_file is defined
+  tags:
+      - 4.2.1.4
+
+- name: 3.3 - Disable uncommon network protocols
+  block:
+      # This collection of tasks creates a empty list and save it as a fact.
+      #  For every item that is encountered (without the tag being skipped),
+      #  add a string to the list.
+      - name: 3.3.0 - Create empty list of uncommon network protocols to disable
+        set_fact:
+          uncommon_network: []
+
+      - name: 3.3.1 - Add dccp to list of uncommon network protocols to disable
+        set_fact:
+          uncommon_network: "{{ uncommon_network + [ 'dccp' ] }}"
+        tags:
+          - 3.3.1
+
+      - name: 3.3.2 - Add sctp to list of uncommon network protocols to disable
+        set_fact:
+          uncommon_network: "{{ uncommon_network + [ 'sctp' ] }}"
+        tags:
+          - 3.3.2
+
+      - name: 3.3.3 - Add rds to list of uncommon network protocols to disable
+        set_fact:
+          uncommon_network: "{{ uncommon_network + [ 'rds' ] }}"
+        tags:
+          - 3.3.3
+
+      - name: 3.3.4 - Add tipc to list of uncommon network protocols to disable
+        set_fact:
+          uncommon_network: "{{ uncommon_network + [ 'tipc' ] }}"
+        tags:
+          - 3.3.4
+
+  # With the list complete, use it with the system's package manager
+  #  to remove packages from the system that are not needed.
+      - name: 3.5.0 - Process uncommon network list
+        lineinfile:
+          dest=/etc/modprobe.d/CIS.conf
+          line="install {{ item }} /bin/true"
+          state=present
+          create=yes
+        with_items:
+          - "{{ uncommon_network }}"
+  tags:
+    - 3.3.0
+        
+# Set Deny For Failed Password Attempts
+- name: Gather the package facts
+  package_facts:
+    manager: auto
+
+- name: XCCDF Value var_accounts_passwords_pam_faillock_deny # promote to variable
+  set_fact:
+    var_accounts_passwords_pam_faillock_deny: !!str 5
+  tags:
+    - always
+
+- name: Add auth pam_faillock preauth deny before pam_unix.so
+  pamd:
+    name: '{{ item }}'
+    type: auth
+    control: sufficient
+    module_path: pam_unix.so
+    new_type: auth
+    new_control: required
+    new_module_path: pam_faillock.so
+    module_arguments: preauth silent deny={{ var_accounts_passwords_pam_faillock_deny
+      }}
+    state: before
+  loop:
+    - system-auth
+    - password-auth
+  when: '"pam" in ansible_facts.packages'
+
+- name: Add deny argument to auth pam_faillock preauth
+  pamd:
+    name: '{{ item }}'
+    type: auth
+    control: required
+    module_path: pam_faillock.so
+    module_arguments: preauth silent deny={{ var_accounts_passwords_pam_faillock_deny
+      }}
+    state: args_present
+  loop:
+    - system-auth
+    - password-auth
+  when: '"pam" in ansible_facts.packages'
+
+
+- name: Add auth pam_faillock authfail deny after pam_unix.so
+  pamd:
+    name: '{{ item }}'
+    type: auth
+    control: sufficient
+    module_path: pam_unix.so
+    new_type: auth
+    new_control: '[default=die]'
+    new_module_path: pam_faillock.so
+    module_arguments: authfail deny={{ var_accounts_passwords_pam_faillock_deny }}
+    state: after
+  loop:
+    - system-auth
+    - password-auth
+  when: '"pam" in ansible_facts.packages'
+
+
+- name: Add deny argument to auth pam_faillock authfail
+  pamd:
+    name: '{{ item }}'
+    type: auth
+    new_type: auth
+    control: '[default=die]'
+    module_path: pam_faillock.so
+    module_arguments: authfail deny={{ var_accounts_passwords_pam_faillock_deny }}
+    state: args_present
+  loop:
+    - system-auth
+    - password-auth
+  when: '"pam" in ansible_facts.packages'
+
+
+- name: Add account pam_faillock before pam_unix.so
+  pamd:
+    name: '{{ item }}'
+    type: account
+    control: required
+    module_path: pam_unix.so
+    new_type: account
+    new_control: required
+    new_module_path: pam_faillock.so
+    state: before
+  loop:
+    - system-auth
+    - password-auth
+  when: '"pam" in ansible_facts.packages'
+
+
+
+# Set Lockout Time for Failed Password Attempts
+- name: Gather the package facts
+  package_facts:
+    manager: auto
+
+- name: XCCDF Value var_accounts_passwords_pam_faillock_unlock_time # promote to variable
+  set_fact:
+    var_accounts_passwords_pam_faillock_unlock_time: !!str 900
+  tags:
+    - always
+
+- name: Add auth pam_faillock preauth unlock_time before pam_unix.so
+  pamd:
+    name: '{{ item }}'
+    type: auth
+    control: sufficient
+    module_path: pam_unix.so
+    new_type: auth
+    new_control: required
+    new_module_path: pam_faillock.so
+    module_arguments: preauth silent unlock_time={{ var_accounts_passwords_pam_faillock_unlock_time
+      }}
+    state: before
+  loop:
+    - system-auth
+    - password-auth
+  when: '"pam" in ansible_facts.packages'
+ 
+
+- name: Add unlock_time argument to pam_faillock preauth
+  pamd:
+    name: '{{ item }}'
+    type: auth
+    control: required
+    module_path: pam_faillock.so
+    module_arguments: preauth silent unlock_time={{ var_accounts_passwords_pam_faillock_unlock_time
+      }}
+    state: args_present
+  loop:
+    - system-auth
+    - password-auth
+  when: '"pam" in ansible_facts.packages'
+
+
+- name: Add auth pam_faillock authfail unlock_interval after pam_unix.so
+  pamd:
+    name: '{{ item }}'
+    type: auth
+    control: sufficient
+    module_path: pam_unix.so
+    new_type: auth
+    new_control: '[default=die]'
+    new_module_path: pam_faillock.so
+    module_arguments: authfail unlock_time={{ var_accounts_passwords_pam_faillock_unlock_time
+      }}
+    state: after
+  loop:
+    - system-auth
+    - password-auth
+  when: '"pam" in ansible_facts.packages'
+
+ 
+- name: Add unlock_time argument to auth pam_faillock authfail
+  pamd:
+    name: '{{ item }}'
+    type: auth
+    control: '[default=die]'
+    module_path: pam_faillock.so
+    module_arguments: authfail unlock_time={{ var_accounts_passwords_pam_faillock_unlock_time
+      }}
+    state: args_present
+  loop:
+    - system-auth
+    - password-auth
+  when: '"pam" in ansible_facts.packages'
+
+
+- name: Add account pam_faillock before pam_unix.so
+  pamd:
+    name: '{{ item }}'
+    type: account
+    control: required
+    module_path: pam_unix.so
+    new_type: account
+    new_control: required
+    new_module_path: pam_faillock.so
+    state: before
+  loop:
+    - system-auth
+    - password-auth
+  when: '"pam" in ansible_facts.packages'
+
+# Limit Password Reuse
+
+- name: XCCDF Value var_password_pam_unix_remember # promote to variable
+  set_fact:
+    var_password_pam_unix_remember: !!str 5
+  tags:
+    - always
+
+- name: Do not allow users to reuse recent passwords - system-auth (change)
+  replace:
+    dest: /etc/pam.d/system-auth
+    regexp: ^(password\s+sufficient\s+pam_unix\.so\s.*remember\s*=\s*)(\S+)(.*)$
+    replace: \g<1>{{ var_password_pam_unix_remember }}\g<3>
+  when: '"pam" in ansible_facts.packages'
+
+
+- name: Do not allow users to reuse recent passwords - system-auth (add)
+  replace:
+    dest: /etc/pam.d/system-auth
+    regexp: ^password\s+sufficient\s+pam_unix\.so\s(?!.*remember\s*=\s*).*$
+    replace: \g<0> remember={{ var_password_pam_unix_remember }}
+  when: '"pam" in ansible_facts.packages'
+

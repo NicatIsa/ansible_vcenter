@@ -1,0 +1,38 @@
+---
+# tasks file for ansible_vmware
+- name: Create a VM from a template
+  vmware_guest:
+      hostname: "{{ HOSTNAME }}"
+      username: "{{ USERNAME }}"
+      password: "{{ PASSWORD }}"
+      validate_certs: no
+      datacenter: Datacenter
+      folder: /vm
+      name: Test-vm01
+      state: poweredon
+      template: Test
+      disk:
+      - size_gb: 40
+        type: thin
+        datastore: datastore1
+      hardware:
+         memory_mb: 1024
+         num_cpus: 1
+         num_cpu_cores_per_socket: 1
+         scsi: paravirtual
+         max_connections: 5       # Maximum number of active remote display connections for the virtual machines
+         hotadd_cpu: True         # Allow virtual CPUs to be added while the virtual machine is running.
+         hotremove_cpu: True      # Allow virtual CPUs to be removed while the virtual machine is running.
+         hotadd_memory: True      # Allow memory to be added while the virtual machine is running.
+      cdrom:
+          type: iso
+          iso_path: "[datastore1] ISO/CentOS-8-x86_64-1905-dvd1.iso"
+      networks:
+      - name: Test Segmen Vlan15 172.31.5.0
+        ip: "{{ IP_ADDR }}"
+        netmask: "{{ NETMASK }}"
+        gateway: "{{ GATEWAY }}"
+        wait_for_ip_address: yes
+        wait_for_customization: yes
+  delegate_to: localhost
+  register: deploy

@@ -1,0 +1,20 @@
+- hosts: test
+
+  tasks:
+  - name: Gather the package facts
+    package_facts:
+      manager: auto
+
+  - name: XCCDF Value var_accounts_minimum_age_login_defs # promote to variable
+    set_fact:
+      var_accounts_minimum_age_login_defs: !!str 7
+    tags:
+     - always
+
+  - name: Set Password Minimum Age
+    lineinfile:
+      create: true
+      dest: /etc/login.defs
+      regexp: ^#?PASS_MIN_DAYS
+      line: PASS_MIN_DAYS {{ var_accounts_minimum_age_login_defs }}
+    when: '"shadow-utils" in ansible_facts.packages'

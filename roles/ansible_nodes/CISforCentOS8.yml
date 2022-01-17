@@ -1,0 +1,7 @@
+- name: Create a VM from a template
+  hosts: test
+  tasks:
+  - name: Run hardening playbook for CentOS8
+    import_role:
+      name: ansible_nodes
+
